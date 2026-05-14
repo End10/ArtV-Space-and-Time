@@ -15,6 +15,10 @@
 <script>
 // ── Constants ─────────────────────────────────────────────────────────
 const VW=580,VH=400,WORLD_W=2800,WORLD_H=600;
+// Secret zone lives below the main world
+const SECRET_Y=900;        // y-coordinate of the secret zone floor area
+const SECRET_VOID_X1=1050; // x range of the void gap that drops you down
+const SECRET_VOID_X2=1200; // player must fall through here to enter secret
 const GRAVITY=0.45,JUMP_VEL=-9.5,SPEED=2.8,REVEAL_R=100,MAX_HP=5;
 
 // ── Palette ───────────────────────────────────────────────────────────
@@ -54,6 +58,38 @@ const FRAGMENTS=[
   {type:1,x:2310,y:138,text:"the algorithm doesn't know\nwhat you actually need."},
   {type:5,x:2650,y:288,text:"you let yourself feel it\nwithout naming it."},
   {type:7,x:2720,y:200,text:"this moment is yours.\nnobody is watching."},
+];
+
+// ── Secret zone platforms (deep below the main world) ───────────────
+const SECRET_PLATFORMS=[
+  [800,980,600,20],   // wide floor
+  [820,920,80,14],    // left cluster
+  [960,880,100,14],
+  [1100,840,120,14],  // centre — secret fragment sits here
+  [1260,880,90,14],
+  [1380,930,80,14],
+  [900,1040,40,14],   // floating lower
+  [1200,1050,60,14],
+  // exit shaft platforms — staircase back up to main world
+  [740,940,60,14],
+  [680,880,60,14],
+  [640,820,60,14],
+  [640,760,60,14],    // top of shaft — re-enters main world gap
+];
+
+// ── Secret fragment ───────────────────────────────────────────────────
+// type 8 = special glowing orb drawn uniquely
+const SECRET_FRAGMENT={
+  x:1150,y:820,
+  text:"you fell through the cracks.
+and found something real down here.
+you were always allowed to stop.",
+  collected:false,
+};
+
+// ── Secret zone noise (fewer, slower, more oppressive) ────────────────
+const SECRET_NOISE_DEFS=[
+  [860,960],[1000,940],[1120,900],[1300,910],[1050,1020],[1180,1000],
 ];
 
 // ── Noise entity home positions ───────────────────────────────────────
@@ -103,6 +139,12 @@ const ctx=canvas.getContext('2d');
 const rc=document.createElement('canvas');
 rc.width=VW;rc.height=VH;
 const rctx=rc.getContext('2d');
+
+// Dedicated fog canvas — drawn separately then blitted over the scene
+// This avoids any compositing artifacts on the render surface itself
+const fogCanvas=document.createElement('canvas');
+fogCanvas.width=VW;fogCanvas.height=VH;
+const fogCtx=fogCanvas.getContext('2d');
 
 function resize(){
   const sw=window.innerWidth,sh=window.innerHeight;
@@ -483,6 +525,26 @@ function rectCollide(ax,ay,aw,ah,bx,by,bw,bh){
   return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;
 }
 
+function resolvePlatformsFromList(obj,list){
+  obj.onGround=false;
+  for(let i=0;i<list.length;i++){
+    const[px,py,pw,ph]=list[i];
+    if(!rectCollide(obj.x,obj.y,obj.w,obj.h,px,py,pw,ph))continue;
+    const ot=obj.y+obj.h-py,ob=py+ph-obj.y;
+    const ol=obj.x+obj.w-px,orr=px+pw-obj.x;
+    const mv=Math.min(ol,orr);
+    if(ot<ob&&ot<mv&&obj.vy>=0){
+      obj.y=py-obj.h;obj.vy=0;obj.onGround=true;
+      if(obj.isPlayer){
+        obj.lastSafeX=Math.max(px+2,Math.min(px+pw-obj.w-2,obj.x));
+        obj.lastSafeY=py-obj.h;
+      }
+    } else if(ob<=ot&&ob<mv&&obj.vy<0){obj.y=py+ph;obj.vy=0;}
+    else if(ol<=orr){obj.x=px-obj.w;if(obj.vx>0)obj.vx=0;}
+    else{obj.x=px+pw;if(obj.vx<0)obj.vx=0;}
+  }
+}
+
 function resolvePlatforms(obj){
   obj.onGround=false;
   for(let i=0;i<PLATFORMS.length;i++){
@@ -521,6 +583,14 @@ function resetGame(){
       homeX:nd[0],homeY:nd[1],
       driftPhase:Math.random()*Math.PI*2,
     })),
+    secretNoiseEnts:SECRET_NOISE_DEFS.map((nd,i)=>({
+      x:nd[0],y:nd[1],vx:0,vy:0,onGround:false,
+      col:'#cc1133',
+      phase:Math.random()*Math.PI*2,
+      jumpTimer:120+Math.floor(Math.random()*60),
+      homeX:nd[0],homeY:nd[1],
+      driftPhase:Math.random()*Math.PI*2,
+    })),
     collected:new Array(FRAGMENTS.length).fill(false),
     heartHp:MAX_HP,heartFlash:0,heartVisible:false,heartVisTimer:0,
     heartShattered:false,shatterParts:[],shatterTimer:0,
@@ -528,8 +598,13 @@ function resetGame(){
     dead:false,deathTimer:0,
     released:false,endAlpha:0,endText:'',
     jumped:false,
+    inSecret:false,          // whether player is currently in the secret zone
+    secretEntered:false,     // has the secret ever been found this run
+    secretNoiseEnts:[],      // initialised below
+    secretTransition:0,      // fade timer when entering/leaving
   };
-  showMsg("the world stretches into the dark.\nyou carry your own light.\nkeep moving.");
+  SECRET_FRAGMENT.collected=false;
+    showMsg("the world stretches into the dark.\nyou carry your own light.\nkeep moving.");
 }
 
 function showMsg(text){state.msgText=text;state.msgTimer=240;}
@@ -580,11 +655,38 @@ function update(){
   pl.vy+=GRAVITY;pl.x+=pl.vx;pl.y+=pl.vy;
   pl.x=Math.max(0,Math.min(WORLD_W-pl.w,pl.x));
 
-  if(pl.y>WORLD_H+40){
-    pl.x=pl.lastSafeX;pl.y=pl.lastSafeY;
-    pl.vx=0;pl.vy=0;pl.invincible=80;takeDamage();
+  // Check if player fell into the void
+  if(!state.inSecret && pl.y>WORLD_H+40){
+    // Is the player falling through the secret void gap?
+    const inGap=pl.x+pl.w/2>SECRET_VOID_X1 && pl.x+pl.w/2<SECRET_VOID_X2;
+    if(inGap){
+      // Drop into secret zone
+      state.inSecret=true;
+      state.secretEntered=true;
+      state.secretTransition=60;
+      pl.x=1050; pl.y=SECRET_Y-80;
+      pl.vx=0; pl.vy=0; pl.invincible=80;
+      showMsg("you fell through the cracks.\nsomething is different down here.");
+    } else {
+      // Normal void death — respawn on last safe platform
+      pl.x=pl.lastSafeX;pl.y=pl.lastSafeY;
+      pl.vx=0;pl.vy=0;pl.invincible=80;takeDamage();
+    }
   }
-  resolvePlatforms(pl);
+  // Exit secret zone — climb back up through the shaft
+  if(state.inSecret && pl.y<SECRET_Y-200){
+    state.inSecret=false;
+    state.secretTransition=60;
+    pl.x=1100; pl.y=WORLD_H-120;
+    pl.vx=0; pl.vy=-2;
+    showMsg("you resurface.\ncarrying what you found.");
+  }
+  // Resolve against correct platform set depending on zone
+  if(state.inSecret){
+    resolvePlatformsFromList(pl,SECRET_PLATFORMS);
+  } else {
+    resolvePlatforms(pl);
+  }
   if(Math.abs(pl.vx)>0.3)pl.moveAnim++;
 
   // Noise entities
@@ -603,6 +705,24 @@ function update(){
         if(n.jumpTimer<=0){n.vy=JUMP_VEL*0.5;n.jumpTimer=80+Math.floor(Math.random()*120);}}
       if(n.y>WORLD_H+80){n.y=n.homeY;n.vy=0;}
     }
+    // Secret zone noise entities
+    if(state.inSecret){
+      for(const n of state.secretNoiseEnts){
+        n.driftPhase+=0.012;
+        n.x=n.homeX+Math.sin(n.driftPhase)*8;
+        n.y+=n.vy;n.vy+=GRAVITY*0.5;n.onGround=false;
+        for(const p of SECRET_PLATFORMS){
+          const[px,py,pw,ph]=p;
+          if(rectCollide(n.x,n.y,20,20,px,py,pw,ph)){
+            const ot=n.y+20-py;
+            if(ot>0&&ot<24&&n.vy>=0){n.y=py-20;n.vy=0;n.onGround=true;break;}
+          }
+        }
+        if(n.onGround){n.jumpTimer--;
+          if(n.jumpTimer<=0){n.vy=JUMP_VEL*0.4;n.jumpTimer=120+Math.floor(Math.random()*120);}}
+        if(n.y>SECRET_Y+200){n.y=n.homeY;n.vy=0;}
+      }
+    }
   }
 
   // Fragment pickup
@@ -614,9 +734,21 @@ function update(){
       state.collected[i]=true;showMsg(f.text);restoreHp();
       if(state.collected.every(Boolean)){
         state.released=true;
-        state.endText="you found all the fragments.\n\nthis was your life all along.\n\nthe noise was never the whole story.";
+        state.endText="you found all the fragments.\n\nwas this the path you were meant to take?";
         state.endAlpha=220;
       }
+    }
+  }
+
+  // Secret fragment pickup
+  if(state.inSecret && !SECRET_FRAGMENT.collected){
+    const sf=SECRET_FRAGMENT;
+    const dx=pl.x+pl.w/2-(sf.x+6),dy=pl.y+pl.h/2-(sf.y+6);
+    if(Math.sqrt(dx*dx+dy*dy)<22){
+      SECRET_FRAGMENT.collected=true;
+      showMsg(sf.text);
+      state.heartHp=Math.min(MAX_HP,state.heartHp+MAX_HP); // full heal
+      state.heartVisible=true;state.heartVisTimer=200;
     }
   }
 
@@ -627,18 +759,28 @@ function update(){
     }
   }
 
+  // Secret zone noise collision
+  if(state.inSecret && pl.invincible<=0){
+    for(const n of state.secretNoiseEnts){
+      if(rectCollide(pl.x,pl.y,pl.w,pl.h,n.x,n.y,20,20)){takeDamage();break;}
+    }
+  }
+
   // Timers
   if(pl.invincible>0)pl.invincible--;
   if(state.heartFlash>0)state.heartFlash--;
   if(state.heartVisTimer>0){state.heartVisTimer--;if(state.heartVisTimer===0)state.heartVisible=false;}
   if(state.msgTimer>0)state.msgTimer--;
+  if(state.secretTransition>0)state.secretTransition--;
 
-  // Camera
+  // Camera — follows player anywhere including secret zone
   const tx=pl.x+pl.w/2-VW/2,ty=pl.y+pl.h/2-VH*0.55;
   state.cam.x+=(tx-state.cam.x)*0.1;
   state.cam.y+=(ty-state.cam.y)*0.1;
   state.cam.x=Math.max(0,Math.min(WORLD_W-VW,state.cam.x));
-  state.cam.y=Math.max(0,Math.min(WORLD_H-VH,state.cam.y));
+  // Allow camera to go below WORLD_H when in secret zone
+  const camYMax=state.inSecret?SECRET_Y+200:WORLD_H-VH;
+  state.cam.y=Math.max(-50,Math.min(camYMax,state.cam.y));
 }
 
 // ── Draw ──────────────────────────────────────────────────────────────
@@ -649,6 +791,31 @@ function draw(){
   // 1. Background
   drawBackground(state.cam.x,state.tick);
 
+  // 1b. Void gap hint — faint cracks in the ground above the secret entrance
+  if(!state.inSecret){
+    const gapSX=SECRET_VOID_X1-ox;
+    const gapW=SECRET_VOID_X2-SECRET_VOID_X1;
+    const groundY=520-oy; // main ground level
+    if(gapSX<VW && gapSX+gapW>0 && groundY>0 && groundY<VH){
+      // Faint purple crack lines
+      const flicker=Math.sin(state.tick*0.04)*0.3+0.4;
+      rctx.globalAlpha=flicker*0.6;
+      rctx.strokeStyle='#6030a0';rctx.lineWidth=1;
+      // jagged crack pattern
+      rctx.beginPath();
+      rctx.moveTo(gapSX,groundY);
+      rctx.lineTo(gapSX+gapW*0.3,groundY+6);
+      rctx.lineTo(gapSX+gapW*0.5,groundY+2);
+      rctx.lineTo(gapSX+gapW*0.7,groundY+8);
+      rctx.lineTo(gapSX+gapW,groundY);
+      rctx.stroke();
+      rctx.globalAlpha=flicker*0.3;
+      rctx.fillStyle='#4020608';
+      rctx.fillRect(gapSX,groundY,gapW,4);
+      rctx.globalAlpha=1;
+    }
+  }
+
   // 2. Platforms
   for(const[px,py,pw,ph]of PLATFORMS){
     const sx=px-ox,sy=py-oy;
@@ -656,6 +823,43 @@ function draw(){
     pr(sx,sy,pw,ph,C.platBody);
     pr(sx,sy,pw,3,C.platTop);
     for(let tx=0;tx<pw;tx+=10)pr(sx+tx,sy+5,1,ph-5,C.platLine);
+  }
+
+  // 2b. Secret zone platforms and content
+  if(state.inSecret || (state.cam.y>WORLD_H-VH*0.5)){
+    for(const[px,py,pw,ph]of SECRET_PLATFORMS){
+      const sx=px-ox,sy=py-oy;
+      if(sx+pw<0||sx>VW||sy+ph<0||sy>VH)continue;
+      // Secret platforms glow faintly red/purple
+      pr(sx,sy,pw,ph,'#1a0818');
+      pr(sx,sy,pw,3,'#3a1030');
+      for(let tx=0;tx<pw;tx+=10)pr(sx+tx,sy+5,1,ph-5,'#0e0612');
+    }
+    // Secret fragment
+    if(!SECRET_FRAGMENT.collected){
+      const sf=SECRET_FRAGMENT;
+      const sx=sf.x-ox,sy=sf.y-oy;
+      if(sx>-20&&sx<VW+20&&sy>-20&&sy<VH+20){
+        // Pulsing orb — different from regular valuables
+        const pulse=Math.sin(state.tick*0.04)*0.5+0.5;
+        rctx.globalAlpha=0.15+pulse*0.25;
+        rctx.fillStyle='#c070ff';
+        rctx.beginPath();rctx.arc(sx+8,sy+8,16,0,Math.PI*2);rctx.fill();
+        rctx.globalAlpha=0.5+pulse*0.4;
+        rctx.fillStyle='#e0a0ff';
+        rctx.beginPath();rctx.arc(sx+8,sy+8,8,0,Math.PI*2);rctx.fill();
+        rctx.globalAlpha=1;
+        rctx.fillStyle='#ffffff';
+        rctx.beginPath();rctx.arc(sx+8,sy+8,3,0,Math.PI*2);rctx.fill();
+      }
+    }
+    // Secret noise sigils
+    for(let i=0;i<state.secretNoiseEnts.length;i++){
+      const n=state.secretNoiseEnts[i];
+      const sx=Math.round(n.x-ox),sy=Math.round(n.y-oy);
+      if(sx+20<0||sx>VW||sy+20<0||sy>VH)continue;
+      drawSigil(i+3,sx,sy,state.tick,n.phase,n.col);
+    }
   }
 
   // 3. Valuables (glow + sprite, hidden under fog)
@@ -683,27 +887,50 @@ function draw(){
   // 5. Player (before fog)
   if(!state.dead)drawHuman(Math.round(pl.x-ox),Math.round(pl.y-oy),pl.facing,pl.moveAnim,pl.invincible,state.tick);
 
-  // 6. Fog of war
+  // 6. Fog of war — drawn on a dedicated offscreen canvas to avoid artifacts
+  // Step A: fill fog canvas entirely with the shadow colour
   const pcx=Math.round(pl.x+pl.w/2-ox);
   const pcy=Math.round(pl.y+pl.h/2-oy);
-  const fog=rctx.createRadialGradient(pcx,pcy,0,pcx,pcy,REVEAL_R);
-  fog.addColorStop(0,'rgba(3,2,12,0)');
-  fog.addColorStop(0.45,'rgba(3,2,12,0.1)');
-  fog.addColorStop(0.75,'rgba(3,2,12,0.8)');
-  fog.addColorStop(1,'rgba(3,2,12,0.97)');
-  rctx.fillStyle='rgba(3,2,12,0.97)';
-  rctx.fillRect(0,0,VW,VH);
-  rctx.fillStyle=fog;
-  rctx.globalCompositeOperation='destination-out';
-  rctx.beginPath();rctx.arc(pcx,pcy,REVEAL_R,0,Math.PI*2);rctx.fill();
-  rctx.globalCompositeOperation='source-over';
-  // re-apply dark fog everywhere except reveal circle
-  const fog2=rctx.createRadialGradient(pcx,pcy,0,pcx,pcy,REVEAL_R);
-  fog2.addColorStop(0,'rgba(3,2,12,0)');
-  fog2.addColorStop(0.5,'rgba(3,2,12,0.05)');
-  fog2.addColorStop(0.78,'rgba(3,2,12,0.75)');
-  fog2.addColorStop(1,'rgba(3,2,12,0.97)');
-  rctx.fillStyle=fog2;rctx.fillRect(0,0,VW,VH);
+  fogCtx.clearRect(0,0,VW,VH);
+  fogCtx.fillStyle='rgb(3,2,12)';
+  fogCtx.fillRect(0,0,VW,VH);
+  // Step B: punch a smooth radial hole using destination-out
+  // The gradient goes from fully transparent at centre to opaque at the reveal radius
+  const lightGrad=fogCtx.createRadialGradient(pcx,pcy,0,pcx,pcy,REVEAL_R);
+  lightGrad.addColorStop(0,  'rgba(0,0,0,1)');   // fully erased at centre
+  lightGrad.addColorStop(0.5,'rgba(0,0,0,0.95)');
+  lightGrad.addColorStop(0.8,'rgba(0,0,0,0.5)');
+  lightGrad.addColorStop(1,  'rgba(0,0,0,0)');   // fog intact at edge
+  fogCtx.globalCompositeOperation='destination-out';
+  fogCtx.fillStyle=lightGrad;
+  fogCtx.fillRect(0,0,VW,VH);
+  fogCtx.globalCompositeOperation='source-over';
+  // Step C: blit the fog canvas over the scene — clean, no seams
+  rctx.drawImage(fogCanvas,0,0);
+
+  // 6b. Secret zone deep tint + transition fade
+  if(state.inSecret){
+    // Deep red-purple atmosphere
+    rctx.fillStyle='rgba(40,0,30,0.18)';
+    rctx.fillRect(0,0,VW,VH);
+    // Subtle scanline feel — horizontal bands
+    for(let sy2=0;sy2<VH;sy2+=4){
+      rctx.fillStyle='rgba(0,0,0,0.06)';
+      rctx.fillRect(0,sy2,VW,1);
+    }
+    // Void indicator at top — faint text if near exit shaft
+    if(state.player.y<SECRET_Y-120){
+      rctx.fillStyle='rgba(200,160,255,0.4)';
+      rctx.font='10px monospace';
+      const hint='↑ climb back up';
+      rctx.fillText(hint,VW/2-rctx.measureText(hint).width/2,20);
+    }
+  }
+  if(state.secretTransition>0){
+    const a=state.secretTransition/60;
+    rctx.fillStyle=`rgba(3,2,12,${a})`;
+    rctx.fillRect(0,0,VW,VH);
+  }
 
   // 7. Low-HP red vignette
   if(!state.heartShattered&&state.heartHp<=2){
