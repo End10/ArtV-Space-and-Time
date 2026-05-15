@@ -17,8 +17,8 @@
 const VW=580,VH=400,WORLD_W=2800,WORLD_H=600;
 // Secret zone lives below the main world
 const SECRET_Y=900;        // y-coordinate of the secret zone floor area
-const SECRET_VOID_X1=1050; // x range of the void gap that drops you down
-const SECRET_VOID_X2=1200; // player must fall through here to enter secret
+const SECRET_VOID_X1=620;  // x range of the void gap that drops you down
+const SECRET_VOID_X2=800;   // player must fall through here to enter secret
 const GRAVITY=0.45,JUMP_VEL=-9.5,SPEED=2.8,REVEAL_R=100,MAX_HP=5;
 
 // ── Palette ───────────────────────────────────────────────────────────
@@ -62,34 +62,32 @@ const FRAGMENTS=[
 
 // ── Secret zone platforms (deep below the main world) ───────────────
 const SECRET_PLATFORMS=[
-  [800,980,600,20],   // wide floor
-  [820,920,80,14],    // left cluster
-  [960,880,100,14],
-  [1100,840,120,14],  // centre — secret fragment sits here
-  [1260,880,90,14],
-  [1380,930,80,14],
-  [900,1040,40,14],   // floating lower
-  [1200,1050,60,14],
+  [400,980,600,20],   // wide floor
+  [420,920,80,14],    // left cluster
+  [560,880,100,14],
+  [700,840,120,14],   // centre — secret fragment sits here
+  [860,880,90,14],
+  [980,930,80,14],
+  [500,1040,40,14],   // floating lower
+  [800,1050,60,14],
   // exit shaft platforms — staircase back up to main world
-  [740,940,60,14],
-  [680,880,60,14],
-  [640,820,60,14],
-  [640,760,60,14],    // top of shaft — re-enters main world gap
+  [440,940,60,14],
+  [400,880,60,14],
+  [380,820,60,14],
+  [380,760,60,14],    // top of shaft — re-enters main world gap
 ];
 
 // ── Secret fragment ───────────────────────────────────────────────────
 // type 8 = special glowing orb drawn uniquely
 const SECRET_FRAGMENT={
-  x:1150,y:820,
-  text:"you fell through the cracks.
-and found something real down here.
-you were always allowed to stop.",
+  x:750,y:820,
+  text:"you fell through the cracks.\nand found something real down here.\nyou were always allowed to stop.",
   collected:false,
 };
 
 // ── Secret zone noise (fewer, slower, more oppressive) ────────────────
 const SECRET_NOISE_DEFS=[
-  [860,960],[1000,940],[1120,900],[1300,910],[1050,1020],[1180,1000],
+  [460,960],[600,940],[720,900],[900,910],[550,1020],[780,1000],
 ];
 
 // ── Noise entity home positions ───────────────────────────────────────
@@ -138,7 +136,7 @@ const ctx=canvas.getContext('2d');
 // Internal render canvas at fixed resolution
 const rc=document.createElement('canvas');
 rc.width=VW;rc.height=VH;
-const rctx=rc.getContext('2d');
+const rctx=rc.getContext('2d',{alpha:false});
 
 // Dedicated fog canvas — drawn separately then blitted over the scene
 // This avoids any compositing artifacts on the render surface itself
@@ -330,119 +328,121 @@ function drawValuable(vtype,sx,sy,tick){
 }
 
 // ── Draw corrupted sigils ─────────────────────────────────────────────
+// Each sigil is rendered on an isolated 20x20 offscreen canvas so that
+// destination-out compositing never touches the main render surface.
+const sigilCanvas=document.createElement('canvas');
+sigilCanvas.width=20;sigilCanvas.height=20;
+const sc=sigilCanvas.getContext('2d');
+
 function drawSigil(sigilType,sx,sy,tick,phase,colHex){
   const pulse=Math.sin(tick*0.03+phase)*0.12+0.88;
-  const alpha=pulse;
   const[cr,cg,cb]=hexToRgb(colHex);
-  const dark=`rgba(${Math.max(0,cr-80)},${Math.max(0,cg-10)},${Math.max(0,cb-10)},${alpha})`;
-  const bright=`rgba(${Math.min(255,cr+40)},${Math.min(255,cg+20)},${Math.min(255,cb+20)},${alpha})`;
-  const base=`rgba(${cr},${cg},${cb},${alpha})`;
+  const dark=`rgba(${Math.max(0,cr-80)},${Math.max(0,cg-10)},${Math.max(0,cb-10)},${pulse})`;
+  const bright=`rgba(${Math.min(255,cr+40)},${Math.min(255,cg+20)},${Math.min(255,cb+20)},${pulse})`;
+  const base=`rgba(${cr},${cg},${cb},${pulse})`;
   const t=sigilType%8;
 
-  rctx.save();
-  rctx.translate(sx,sy);
+  // Always draw on isolated canvas — keeps rctx composite mode clean
+  sc.clearRect(0,0,20,20);
+  sc.globalCompositeOperation='source-over';
+  sc.globalAlpha=1;
 
   if(t===0){// BROKEN CROSS
-    rctx.fillStyle=base;rctx.fillRect(8,0,4,20);rctx.fillRect(0,8,20,4);
-    rctx.clearRect(8,8,4,4);
-    rctx.fillStyle=dark;rctx.fillRect(0,0,4,4);rctx.fillRect(16,0,4,4);
-    rctx.fillRect(0,16,4,4);rctx.fillRect(16,16,4,4);
-    rctx.clearRect(8,5,4,2);rctx.clearRect(8,14,4,2);
-    rctx.fillStyle=bright;rctx.fillRect(8,0,4,1);rctx.fillRect(0,8,1,4);
+    sc.fillStyle=base;sc.fillRect(8,0,4,20);sc.fillRect(0,8,20,4);
+    sc.clearRect(8,8,4,4);sc.clearRect(8,5,4,2);sc.clearRect(8,14,4,2);
+    sc.fillStyle=dark;sc.fillRect(0,0,4,4);sc.fillRect(16,0,4,4);
+    sc.fillRect(0,16,4,4);sc.fillRect(16,16,4,4);
+    sc.fillStyle=bright;sc.fillRect(8,0,4,1);sc.fillRect(0,8,1,4);
   } else if(t===1){// INVERTED TRIANGLE
-    rctx.fillStyle=base;
-    rctx.beginPath();rctx.moveTo(10,0);rctx.lineTo(0,20);rctx.lineTo(20,20);rctx.fill();
-    rctx.clearRect(0,0,20,20);
-    rctx.fillStyle=base;
-    rctx.beginPath();rctx.moveTo(10,0);rctx.lineTo(0,20);rctx.lineTo(20,20);rctx.closePath();rctx.fill();
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';
-    rctx.beginPath();rctx.moveTo(10,5);rctx.lineTo(3,17);rctx.lineTo(17,17);rctx.closePath();rctx.fill();
-    rctx.globalCompositeOperation='source-over';
-    rctx.strokeStyle=bright;rctx.lineWidth=1;
-    rctx.beginPath();rctx.moveTo(10,0);rctx.lineTo(10,4);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(0,20);rctx.lineTo(4,20);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(20,20);rctx.lineTo(16,20);rctx.stroke();
+    sc.fillStyle=base;
+    sc.beginPath();sc.moveTo(10,0);sc.lineTo(0,20);sc.lineTo(20,20);sc.closePath();sc.fill();
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';
+    sc.beginPath();sc.moveTo(10,5);sc.lineTo(3,17);sc.lineTo(17,17);sc.closePath();sc.fill();
+    sc.globalCompositeOperation='source-over';
+    sc.strokeStyle=bright;sc.lineWidth=1;
+    sc.beginPath();sc.moveTo(10,0);sc.lineTo(10,4);sc.stroke();
+    sc.beginPath();sc.moveTo(0,20);sc.lineTo(4,20);sc.stroke();
+    sc.beginPath();sc.moveTo(20,20);sc.lineTo(16,20);sc.stroke();
   } else if(t===2){// CIRCUIT NODE
-    rctx.fillStyle=dark;rctx.fillRect(6,6,8,8);
-    rctx.fillStyle=base;rctx.fillRect(7,7,6,6);
-    rctx.fillRect(9,0,2,6);rctx.fillRect(9,14,2,6);
-    rctx.fillRect(0,9,6,2);rctx.fillRect(14,9,6,2);
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';
-    rctx.fillRect(9,2,2,2);rctx.fillRect(9,15,2,2);
-    rctx.fillRect(2,9,2,2);rctx.fillRect(15,9,2,2);
-    rctx.globalCompositeOperation='source-over';
-    rctx.fillStyle=dark;
-    rctx.fillRect(0,0,3,3);rctx.fillRect(17,0,3,3);
-    rctx.fillRect(0,17,3,3);rctx.fillRect(17,17,3,3);
-    rctx.fillStyle=bright;rctx.fillRect(9,9,2,2);
+    sc.fillStyle=dark;sc.fillRect(6,6,8,8);
+    sc.fillStyle=base;sc.fillRect(7,7,6,6);
+    sc.fillRect(9,0,2,6);sc.fillRect(9,14,2,6);
+    sc.fillRect(0,9,6,2);sc.fillRect(14,9,6,2);
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';
+    sc.fillRect(9,2,2,2);sc.fillRect(9,15,2,2);
+    sc.fillRect(2,9,2,2);sc.fillRect(15,9,2,2);
+    sc.globalCompositeOperation='source-over';
+    sc.fillStyle=dark;sc.fillRect(0,0,3,3);sc.fillRect(17,0,3,3);
+    sc.fillRect(0,17,3,3);sc.fillRect(17,17,3,3);
+    sc.fillStyle=bright;sc.fillRect(9,9,2,2);
   } else if(t===3){// EYE SIGIL
-    rctx.fillStyle=base;rctx.beginPath();rctx.ellipse(10,10,10,4,0,0,Math.PI*2);rctx.fill();
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';
-    rctx.beginPath();rctx.ellipse(10,10,8,2,0,0,Math.PI*2);rctx.fill();
-    rctx.globalCompositeOperation='source-over';
-    rctx.fillStyle=dark;rctx.beginPath();rctx.ellipse(10,10,3,2,0,0,Math.PI*2);rctx.fill();
-    rctx.fillStyle=bright;rctx.fillRect(9,9,2,2);
-    rctx.strokeStyle=bright;rctx.lineWidth=1.5;
-    rctx.beginPath();rctx.moveTo(0,6);rctx.lineTo(0,14);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(20,6);rctx.lineTo(20,14);rctx.stroke();
-    rctx.strokeStyle=base;rctx.lineWidth=1;
-    rctx.beginPath();rctx.moveTo(0,6);rctx.lineTo(3,6);rctx.moveTo(0,14);rctx.lineTo(3,14);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(20,6);rctx.lineTo(17,6);rctx.moveTo(20,14);rctx.lineTo(17,14);rctx.stroke();
+    sc.fillStyle=base;sc.beginPath();sc.ellipse(10,10,10,4,0,0,Math.PI*2);sc.fill();
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';sc.beginPath();sc.ellipse(10,10,8,2,0,0,Math.PI*2);sc.fill();
+    sc.globalCompositeOperation='source-over';
+    sc.fillStyle=dark;sc.beginPath();sc.ellipse(10,10,3,2,0,0,Math.PI*2);sc.fill();
+    sc.fillStyle=bright;sc.fillRect(9,9,2,2);
+    sc.strokeStyle=bright;sc.lineWidth=1.5;
+    sc.beginPath();sc.moveTo(0,6);sc.lineTo(0,14);sc.stroke();
+    sc.beginPath();sc.moveTo(20,6);sc.lineTo(20,14);sc.stroke();
+    sc.strokeStyle=base;sc.lineWidth=1;
+    sc.beginPath();sc.moveTo(0,6);sc.lineTo(3,6);sc.moveTo(0,14);sc.lineTo(3,14);sc.stroke();
+    sc.beginPath();sc.moveTo(20,6);sc.lineTo(17,6);sc.moveTo(20,14);sc.lineTo(17,14);sc.stroke();
   } else if(t===4){// CORRUPTED RUNE
-    rctx.strokeStyle=base;rctx.lineWidth=2;
-    rctx.beginPath();rctx.moveTo(2,2);rctx.lineTo(18,2);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(2,2);rctx.lineTo(2,18);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(18,2);rctx.lineTo(18,12);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(2,18);rctx.lineTo(12,18);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(2,10);rctx.lineTo(14,10);rctx.stroke();
-    rctx.strokeStyle=bright;
-    rctx.beginPath();rctx.moveTo(12,10);rctx.lineTo(18,18);rctx.stroke();
-    rctx.strokeStyle=dark;rctx.lineWidth=1;
-    for(let i=0;i<3;i++){rctx.beginPath();rctx.moveTo(2+i*5,2);rctx.lineTo(2+i*5,5);rctx.stroke();}
+    sc.strokeStyle=base;sc.lineWidth=2;
+    sc.beginPath();sc.moveTo(2,2);sc.lineTo(18,2);sc.stroke();
+    sc.beginPath();sc.moveTo(2,2);sc.lineTo(2,18);sc.stroke();
+    sc.beginPath();sc.moveTo(18,2);sc.lineTo(18,12);sc.stroke();
+    sc.beginPath();sc.moveTo(2,18);sc.lineTo(12,18);sc.stroke();
+    sc.beginPath();sc.moveTo(2,10);sc.lineTo(14,10);sc.stroke();
+    sc.strokeStyle=bright;
+    sc.beginPath();sc.moveTo(12,10);sc.lineTo(18,18);sc.stroke();
+    sc.strokeStyle=dark;sc.lineWidth=1;
+    for(let i=0;i<3;i++){sc.beginPath();sc.moveTo(2+i*5,2);sc.lineTo(2+i*5,5);sc.stroke();}
   } else if(t===5){// VOID DIAMOND
-    rctx.fillStyle=base;
-    rctx.beginPath();rctx.moveTo(10,0);rctx.lineTo(20,10);rctx.lineTo(10,20);rctx.lineTo(0,10);rctx.closePath();rctx.fill();
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';
-    rctx.beginPath();rctx.moveTo(10,4);rctx.lineTo(16,10);rctx.lineTo(10,16);rctx.lineTo(4,10);rctx.closePath();rctx.fill();
-    rctx.globalCompositeOperation='source-over';
-    rctx.strokeStyle=bright;rctx.lineWidth=1;
-    rctx.beginPath();rctx.moveTo(10,6);rctx.lineTo(10,9);rctx.moveTo(10,11);rctx.lineTo(10,14);rctx.stroke();
-    rctx.beginPath();rctx.moveTo(6,10);rctx.lineTo(9,10);rctx.moveTo(11,10);rctx.lineTo(14,10);rctx.stroke();
-    rctx.strokeStyle=dark;rctx.lineWidth=2;
-    rctx.beginPath();rctx.moveTo(10,0);rctx.lineTo(10,2);rctx.moveTo(20,10);rctx.lineTo(18,10);
-    rctx.moveTo(10,20);rctx.lineTo(10,18);rctx.moveTo(0,10);rctx.lineTo(2,10);rctx.stroke();
+    sc.fillStyle=base;
+    sc.beginPath();sc.moveTo(10,0);sc.lineTo(20,10);sc.lineTo(10,20);sc.lineTo(0,10);sc.closePath();sc.fill();
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';
+    sc.beginPath();sc.moveTo(10,4);sc.lineTo(16,10);sc.lineTo(10,16);sc.lineTo(4,10);sc.closePath();sc.fill();
+    sc.globalCompositeOperation='source-over';
+    sc.strokeStyle=bright;sc.lineWidth=1;
+    sc.beginPath();sc.moveTo(10,6);sc.lineTo(10,9);sc.moveTo(10,11);sc.lineTo(10,14);sc.stroke();
+    sc.beginPath();sc.moveTo(6,10);sc.lineTo(9,10);sc.moveTo(11,10);sc.lineTo(14,10);sc.stroke();
+    sc.strokeStyle=dark;sc.lineWidth=2;
+    sc.beginPath();sc.moveTo(10,0);sc.lineTo(10,2);sc.moveTo(20,10);sc.lineTo(18,10);
+    sc.moveTo(10,20);sc.lineTo(10,18);sc.moveTo(0,10);sc.lineTo(2,10);sc.stroke();
   } else if(t===6){// SIGNAL TOWER
-    rctx.strokeStyle=base;rctx.lineWidth=2;
-    rctx.beginPath();rctx.moveTo(10,8);rctx.lineTo(10,20);rctx.stroke();
-    rctx.beginPath();rctx.arc(10,8,6,Math.PI*0.17,Math.PI*0.83);rctx.stroke();
-    rctx.strokeStyle=dark;rctx.lineWidth=1;
-    rctx.beginPath();rctx.arc(10,6,9,Math.PI*0.11,Math.PI*0.44);rctx.stroke();
-    rctx.beginPath();rctx.arc(10,6,9,Math.PI*0.56,Math.PI*0.89);rctx.stroke();
-    rctx.fillStyle=bright;rctx.beginPath();rctx.arc(10,4,2,0,Math.PI*2);rctx.fill();
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';rctx.beginPath();rctx.arc(10,4,1,0,Math.PI*2);rctx.fill();
-    rctx.globalCompositeOperation='source-over';
-    // glitch gap in spine
-    rctx.fillStyle='rgba(0,0,0,0.8)';rctx.fillRect(8,12,4,2);
+    sc.strokeStyle=base;sc.lineWidth=2;
+    sc.beginPath();sc.moveTo(10,8);sc.lineTo(10,20);sc.stroke();
+    sc.beginPath();sc.arc(10,8,6,Math.PI*0.17,Math.PI*0.83);sc.stroke();
+    sc.strokeStyle=dark;sc.lineWidth=1;
+    sc.beginPath();sc.arc(10,6,9,Math.PI*0.11,Math.PI*0.44);sc.stroke();
+    sc.beginPath();sc.arc(10,6,9,Math.PI*0.56,Math.PI*0.89);sc.stroke();
+    sc.fillStyle=bright;sc.beginPath();sc.arc(10,4,2,0,Math.PI*2);sc.fill();
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';sc.beginPath();sc.arc(10,4,1,0,Math.PI*2);sc.fill();
+    sc.globalCompositeOperation='source-over';
+    sc.fillStyle='rgba(0,0,0,0.8)';sc.fillRect(8,12,4,2);
   } else if(t===7){// DEAD STAR
-    rctx.fillStyle=base;
+    sc.fillStyle=base;
     for(let a=0;a<360;a+=45){
       const rad=a*Math.PI/180,rad2=(a+22.5)*Math.PI/180;
-      const ox=10+Math.cos(rad)*9,oy=10+Math.sin(rad)*9;
+      const px2=10+Math.cos(rad)*9,py2=10+Math.sin(rad)*9;
       const mx=10+Math.cos(rad2)*4,my=10+Math.sin(rad2)*4;
       const nx=10-Math.cos(rad2)*4,ny=10-Math.sin(rad2)*4;
-      rctx.beginPath();rctx.moveTo(ox,oy);rctx.lineTo(mx,my);rctx.lineTo(nx,ny);rctx.closePath();rctx.fill();
+      sc.beginPath();sc.moveTo(px2,py2);sc.lineTo(mx,my);sc.lineTo(nx,ny);sc.closePath();sc.fill();
     }
-    rctx.globalCompositeOperation='destination-out';
-    rctx.fillStyle='rgba(0,0,0,1)';rctx.beginPath();rctx.arc(10,10,3,0,Math.PI*2);rctx.fill();
-    rctx.globalCompositeOperation='source-over';
-    rctx.fillStyle=bright;rctx.fillRect(9,9,2,2);
+    sc.globalCompositeOperation='destination-out';
+    sc.fillStyle='rgba(0,0,0,1)';sc.beginPath();sc.arc(10,10,3,0,Math.PI*2);sc.fill();
+    sc.globalCompositeOperation='source-over';
+    sc.fillStyle=bright;sc.fillRect(9,9,2,2);
   }
-  rctx.restore();
+
+  // Blit the isolated sigil canvas onto the main render surface — safe, no bleed
+  rctx.drawImage(sigilCanvas,sx,sy);
 }
 
 // ── Draw pixel human ──────────────────────────────────────────────────
@@ -657,28 +657,31 @@ function update(){
 
   // Check if player fell into the void
   if(!state.inSecret && pl.y>WORLD_H+40){
-    // Is the player falling through the secret void gap?
     const inGap=pl.x+pl.w/2>SECRET_VOID_X1 && pl.x+pl.w/2<SECRET_VOID_X2;
     if(inGap){
-      // Drop into secret zone
       state.inSecret=true;
       state.secretEntered=true;
       state.secretTransition=60;
-      pl.x=1050; pl.y=SECRET_Y-80;
+      pl.x=700; pl.y=SECRET_Y-80;
       pl.vx=0; pl.vy=0; pl.invincible=80;
       showMsg("you fell through the cracks.\nsomething is different down here.");
     } else {
-      // Normal void death — respawn on last safe platform
       pl.x=pl.lastSafeX;pl.y=pl.lastSafeY;
       pl.vx=0;pl.vy=0;pl.invincible=80;takeDamage();
     }
   }
-  // Exit secret zone — climb back up through the shaft
-  if(state.inSecret && pl.y<SECRET_Y-200){
+  // Secret zone deep void — reposition without damage (platforms handle landing)
+  if(state.inSecret && pl.y>SECRET_Y+200){
+    pl.x=700; pl.y=SECRET_Y-80;
+    pl.vx=0; pl.vy=0; pl.invincible=60;
+  }
+  // Exit secret zone — step onto the top shaft platform (x=380-440, y~760)
+  if(state.inSecret && pl.onGround && pl.y<790 && pl.x+pl.w/2>360 && pl.x+pl.w/2<460){
     state.inSecret=false;
     state.secretTransition=60;
-    pl.x=1100; pl.y=WORLD_H-120;
-    pl.vx=0; pl.vy=-2;
+    pl.x=60; pl.y=460;
+    pl.vx=0; pl.vy=0;
+    state.cam.x=0; state.cam.y=0;
     showMsg("you resurface.\ncarrying what you found.");
   }
   // Resolve against correct platform set depending on zone
@@ -734,7 +737,9 @@ function update(){
       state.collected[i]=true;showMsg(f.text);restoreHp();
       if(state.collected.every(Boolean)){
         state.released=true;
-        state.endText="you found all the fragments.\n\nwas this the path you were meant to take?";
+        state.endText=SECRET_FRAGMENT.collected
+          ? "you found everything.\n\neven what the world didn't want you to see.\n\nyou found yourself within the noise."
+          : "you found all the fragments.\n\nwas this the path you were meant to take?";
         state.endAlpha=220;
       }
     }
@@ -788,33 +793,12 @@ function draw(){
   const ox=Math.round(state.cam.x),oy=Math.round(state.cam.y);
   const pl=state.player;
 
+  // Clear render surface at start of every frame (rctx is opaque/alpha:false)
+  rctx.fillStyle='#06060f';
+  rctx.fillRect(0,0,VW,VH);
+
   // 1. Background
   drawBackground(state.cam.x,state.tick);
-
-  // 1b. Void gap hint — faint cracks in the ground above the secret entrance
-  if(!state.inSecret){
-    const gapSX=SECRET_VOID_X1-ox;
-    const gapW=SECRET_VOID_X2-SECRET_VOID_X1;
-    const groundY=520-oy; // main ground level
-    if(gapSX<VW && gapSX+gapW>0 && groundY>0 && groundY<VH){
-      // Faint purple crack lines
-      const flicker=Math.sin(state.tick*0.04)*0.3+0.4;
-      rctx.globalAlpha=flicker*0.6;
-      rctx.strokeStyle='#6030a0';rctx.lineWidth=1;
-      // jagged crack pattern
-      rctx.beginPath();
-      rctx.moveTo(gapSX,groundY);
-      rctx.lineTo(gapSX+gapW*0.3,groundY+6);
-      rctx.lineTo(gapSX+gapW*0.5,groundY+2);
-      rctx.lineTo(gapSX+gapW*0.7,groundY+8);
-      rctx.lineTo(gapSX+gapW,groundY);
-      rctx.stroke();
-      rctx.globalAlpha=flicker*0.3;
-      rctx.fillStyle='#4020608';
-      rctx.fillRect(gapSX,groundY,gapW,4);
-      rctx.globalAlpha=1;
-    }
-  }
 
   // 2. Platforms
   for(const[px,py,pw,ph]of PLATFORMS){
@@ -887,26 +871,99 @@ function draw(){
   // 5. Player (before fog)
   if(!state.dead)drawHuman(Math.round(pl.x-ox),Math.round(pl.y-oy),pl.facing,pl.moveAnim,pl.invincible,state.tick);
 
-  // 6. Fog of war — drawn on a dedicated offscreen canvas to avoid artifacts
-  // Step A: fill fog canvas entirely with the shadow colour
+  // 1b. Void gap hint — visible cracks marking the secret entrance
+  if(!state.inSecret){
+    const gapSX=SECRET_VOID_X1-ox;
+    const gapW=SECRET_VOID_X2-SECRET_VOID_X1;
+    const groundY=520-oy;
+    if(gapSX<VW && gapSX+gapW>0 && groundY>0 && groundY<VH){
+      const pulse=Math.sin(state.tick*0.05)*0.5+0.5;
+      const flicker=0.7+pulse*0.3;
+
+      // Glow beneath the crack — wide purple bloom
+      const glow=rctx.createRadialGradient(
+        gapSX+gapW/2, groundY+4, 2,
+        gapSX+gapW/2, groundY+4, gapW*0.8
+      );
+      glow.addColorStop(0,  'rgba(140,40,255,0.55)');
+      glow.addColorStop(0.4,'rgba(100,20,200,0.25)');
+      glow.addColorStop(1,  'rgba(60,0,120,0)');
+      rctx.fillStyle=glow;
+      rctx.fillRect(gapSX-gapW*0.4, groundY-10, gapW*1.8, 30);
+
+      // Dark void gap fill — shows there is no ground here
+      rctx.fillStyle='rgba(8,0,20,0.9)';
+      rctx.fillRect(gapSX, groundY, gapW, 8);
+
+      // Main crack line — bright and jagged
+      rctx.globalAlpha=flicker;
+      rctx.strokeStyle='#cc66ff';
+      rctx.lineWidth=2.5;
+      rctx.beginPath();
+      rctx.moveTo(gapSX,            groundY+1);
+      rctx.lineTo(gapSX+gapW*0.2,  groundY+7);
+      rctx.lineTo(gapSX+gapW*0.35, groundY+3);
+      rctx.lineTo(gapSX+gapW*0.5,  groundY+9);
+      rctx.lineTo(gapSX+gapW*0.65, groundY+4);
+      rctx.lineTo(gapSX+gapW*0.82, groundY+8);
+      rctx.lineTo(gapSX+gapW,      groundY+2);
+      rctx.stroke();
+
+      // Bright highlight along the crack
+      rctx.strokeStyle='#eebeff';
+      rctx.lineWidth=1;
+      rctx.beginPath();
+      rctx.moveTo(gapSX,            groundY+1);
+      rctx.lineTo(gapSX+gapW*0.2,  groundY+7);
+      rctx.lineTo(gapSX+gapW*0.35, groundY+3);
+      rctx.lineTo(gapSX+gapW*0.5,  groundY+9);
+      rctx.lineTo(gapSX+gapW*0.65, groundY+4);
+      rctx.lineTo(gapSX+gapW*0.82, groundY+8);
+      rctx.lineTo(gapSX+gapW,      groundY+2);
+      rctx.stroke();
+
+      // Small sparks / pixel dots scattered around the crack
+      rctx.fillStyle='#dd88ff';
+      const sparkSeeds=[[0.1,groundY-3],[0.28,groundY+10],[0.5,groundY-2],[0.7,groundY+11],[0.9,groundY-1]];
+      for(const[t,sy2] of sparkSeeds){
+        const flick=Math.sin(state.tick*0.09+t*7)*0.5+0.5;
+        rctx.globalAlpha=flick*flicker;
+        rctx.fillRect(Math.round(gapSX+gapW*t), Math.round(sy2), 2, 2);
+      }
+
+      // Edge glow lines on either side of the gap (shows it is a gap, not solid)
+      rctx.globalAlpha=flicker*0.8;
+      rctx.strokeStyle='#9944cc';
+      rctx.lineWidth=1.5;
+      rctx.beginPath();rctx.moveTo(gapSX,groundY);rctx.lineTo(gapSX,groundY+8);rctx.stroke();
+      rctx.beginPath();rctx.moveTo(gapSX+gapW,groundY);rctx.lineTo(gapSX+gapW,groundY+8);rctx.stroke();
+
+      rctx.globalAlpha=1;
+    }
+  }
+
+
+  // 6. Fog of war
+  // fogCanvas is SRCALPHA. We fill it solid dark, punch a transparent hole
+  // with destination-out, then drawImage onto rctx (which is alpha:false/opaque).
+  // Transparent pixels in fogCanvas reveal rctx underneath — no bleed possible.
   const pcx=Math.round(pl.x+pl.w/2-ox);
   const pcy=Math.round(pl.y+pl.h/2-oy);
   fogCtx.clearRect(0,0,VW,VH);
   fogCtx.fillStyle='rgb(3,2,12)';
   fogCtx.fillRect(0,0,VW,VH);
-  // Step B: punch a smooth radial hole using destination-out
-  // The gradient goes from fully transparent at centre to opaque at the reveal radius
-  const lightGrad=fogCtx.createRadialGradient(pcx,pcy,0,pcx,pcy,REVEAL_R);
-  lightGrad.addColorStop(0,  'rgba(0,0,0,1)');   // fully erased at centre
-  lightGrad.addColorStop(0.5,'rgba(0,0,0,0.95)');
-  lightGrad.addColorStop(0.8,'rgba(0,0,0,0.5)');
-  lightGrad.addColorStop(1,  'rgba(0,0,0,0)');   // fog intact at edge
   fogCtx.globalCompositeOperation='destination-out';
+  const lightGrad=fogCtx.createRadialGradient(pcx,pcy,0,pcx,pcy,REVEAL_R);
+  lightGrad.addColorStop(0,   'rgba(0,0,0,1)');
+  lightGrad.addColorStop(0.5, 'rgba(0,0,0,0.92)');
+  lightGrad.addColorStop(0.78,'rgba(0,0,0,0.4)');
+  lightGrad.addColorStop(1,   'rgba(0,0,0,0)');
   fogCtx.fillStyle=lightGrad;
   fogCtx.fillRect(0,0,VW,VH);
   fogCtx.globalCompositeOperation='source-over';
-  // Step C: blit the fog canvas over the scene — clean, no seams
   rctx.drawImage(fogCanvas,0,0);
+
+
 
   // 6b. Secret zone deep tint + transition fade
   if(state.inSecret){
